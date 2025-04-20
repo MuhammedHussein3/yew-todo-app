@@ -500,6 +500,8 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
 dependencies = [
+ "futures-channel",
+ "futures-core",
  "js-sys",
  "wasm-bindgen",
 ]
@@ -997,6 +999,7 @@ name = "todo"
 version = "0.1.0"
 dependencies = [
  "gloo-storage 0.3.0",
+ "gloo-timers 0.3.0",
  "serde",
  "uuid",
  "wasm-bindgen-test",
@@ -1086,6 +1089,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "458f7a779bf54acc9f347480ac654f68407d3aab21269a6e3c9f922acd9e2da9"
 dependencies = [
  "getrandom 0.3.2",
+ "serde",
 ]
 
 [[package]]
