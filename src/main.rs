@@ -1,10 +1,17 @@
-use yew::{prelude::*, virtual_dom::Key};
+use yew::prelude::*;
 use web_sys::HtmlInputElement;
 use serde::{Serialize, Deserialize};
 use gloo_storage::{LocalStorage, Storage};
 use uuid::Uuid;
 
 const STORAGE_KEY: &str = "todos";
+
+const BUTTON_CLASS: &str = "px-2 py-1 rounded text-white";
+const SAVE_BUTTON: &str = "ml-2 bg-green-500 hover:bg-green-600";
+const CANCEL_BUTTON: &str = "ml-2 bg-gray-500 hover:bg-gray-600";
+const EDIT_BUTTON: &str = "ml-2 bg-yellow-500 hover:bg-yellow-600";
+const DELETE_BUTTON: &str = "ml-2 bg-red-500 hover:bg-red-600";
+const ADD_BUTTON: &str = "bg-blue-500 hover:bg-blue-600 px-4 py-2 rounded";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Todo {
@@ -14,13 +21,13 @@ struct Todo {
 }
 
 fn create_new_todo(todos: &[Todo], title: String) -> Vec<Todo> {
-    let mut new_todos = todos.to_vec();
-    new_todos.push(Todo { 
+    let mut new_todos = Vec::with_capacity(todos.len() + 1);
+    new_todos.extend(todos.iter().cloned());
+    new_todos.push(Todo {
         id: Uuid::new_v4().to_string(),
         title,
-        completed: false, 
+        completed: false,
     });
-
     new_todos
 }
 
@@ -32,14 +39,29 @@ fn read_input_title(input: &HtmlInputElement) -> String {
     input.value().trim().to_string()
 }
 
-fn save_todos_to_storage(key: &str, todos: &[Todo]) {
+fn save_todos_to_storage_with_error(
+    key: &str,
+    todos: &[Todo],
+    error_handle: &UseStateHandle<Option<String>>,
+) {
     if let Err(e) = LocalStorage::set(key, todos) {
-        web_sys::console::log_1(&format!("Storage error: {:?}", e).into());
+        error_handle.set(Some(format!("Storage error: {:?}", e)));
+    } else {
+        error_handle.set(None);
     }
 }
 
 fn update_todos_state(todos_handle: &UseStateHandle<Vec<Todo>>, new_todos: Vec<Todo>) {
     todos_handle.set(new_todos);
+}
+
+fn update_todos(
+    todos_handle: &UseStateHandle<Vec<Todo>>,
+    new_todos: Vec<Todo>,
+    error_handle: &UseStateHandle<Option<String>>,
+) {
+    save_todos_to_storage_with_error(STORAGE_KEY, &new_todos, error_handle);
+    update_todos_state(todos_handle, new_todos);
 }
 
 fn clear_input(input: &HtmlInputElement) {
@@ -51,16 +73,35 @@ fn delete_todo(todos: &[Todo], id: &str) -> Vec<Todo> {
 }
 
 fn toggle_todo(todos: &[Todo], id: &str) -> Vec<Todo> {
-    todos.iter().filter(|todo| todo.id != id).cloned().collect()
+    todos
+        .iter()
+        .map(|todo| {
+            if todo.id == id {
+                Todo {
+                    completed: !todo.completed,
+                    ..todo.clone()
+                }
+            } else {
+                todo.clone()
+            }
+        })
+        .collect()
 }
 
 fn update_todo_title(todos: &[Todo], id: &str, title: &str) -> Vec<Todo> {
-    let mut new_todos = todos.to_vec();
-    if let Some(todo) = new_todos.iter_mut().find(|todo| todo.id == id) {
-        todo.title = title.to_string();
-    }
-
-    new_todos
+    todos
+        .iter()
+        .map(|todo| {
+            if todo.id == id {
+                Todo {
+                    title: title.to_string(),
+                    ..todo.clone()
+                }
+            } else {
+                todo.clone()
+            }
+        })
+        .collect()
 }
 
 fn clear_edit_state(edit_id_handle: &UseStateHandle<Option<String>>) {
@@ -73,38 +114,40 @@ fn set_edit_state(edit_id_handle: &UseStateHandle<Option<String>>, id: &str) {
 
 fn focus_input(input_ref: &NodeRef) {
     if let Some(input) = input_ref.cast::<HtmlInputElement>() {
-        input.focus().unwrap();
+        if input.focus().is_err() {
+            web_sys::console::log_1(&"Failed to focus input".into());
+        }
     }
 }
 
-
 #[function_component(App)]
 fn app() -> Html {
+    let storage_error = use_state(|| None::<String>);
     let todos = use_state(|| {
-        LocalStorage::get(STORAGE_KEY).unwrap_or_else(|_| Vec::<Todo>::new())
+        match LocalStorage::get(STORAGE_KEY) {
+            Ok(todos) => todos,
+            Err(e) => {
+                storage_error.set(Some(format!("Failed to load todos: {:?}", e)));
+                Vec::<Todo>::new()
+            }
+        }
     });
 
     let input_ref = use_node_ref();
     let edit_id = use_state(|| None::<String>);
     let edit_input_ref = use_node_ref();
 
-    // Cruds: First Project (Welcome Rust)
-
     let on_submit = {
         let todos = todos.clone();
         let input_ref = input_ref.clone();
-        Callback::from(move |e: SubmitEvent | {
+        let storage_error = storage_error.clone();
+        Callback::from(move |e: SubmitEvent| {
             e.prevent_default();
             if let Some(input) = input_ref.cast::<HtmlInputElement>() {
                 let title = read_input_title(&input);
-                
                 if is_valid_title(&title) {
                     let new_todos = create_new_todo(&todos, title);
-
-                    save_todos_to_storage(STORAGE_KEY, &new_todos);
-
-                    update_todos_state(&todos, new_todos);
-                    
+                    update_todos(&todos, new_todos, &storage_error);
                     clear_input(&input);
                 }
             }
@@ -113,26 +156,20 @@ fn app() -> Html {
 
     let on_delete = {
         let todos = todos.clone();
+        let storage_error = storage_error.clone();
         Callback::from(move |id: String| {
-
             let new_todos = delete_todo(&todos, &id);
-
-            save_todos_to_storage(STORAGE_KEY, &new_todos);
-
-            update_todos_state(&todos, new_todos);
+            update_todos(&todos, new_todos, &storage_error);
         })
     };
 
     let on_toggle = {
         let todos = todos.clone();
+        let storage_error = storage_error.clone();
         Callback::from(move |id: String| {
-
             let new_todos = toggle_todo(&todos, &id);
-
-            save_todos_to_storage(STORAGE_KEY, &new_todos);
-
-            update_todos_state(&todos, new_todos);
-            })
+            update_todos(&todos, new_todos, &storage_error);
+        })
     };
 
     let on_edit = {
@@ -140,7 +177,6 @@ fn app() -> Html {
         let edit_input_ref = edit_input_ref.clone();
         Callback::from(move |id: String| {
             set_edit_state(&edit_id, &id);
-
             focus_input(&edit_input_ref);
         })
     };
@@ -149,31 +185,24 @@ fn app() -> Html {
         let todos = todos.clone();
         let edit_id = edit_id.clone();
         let edit_input_ref = edit_input_ref.clone();
+        let storage_error = storage_error.clone();
         Callback::from(move |id: String| {
             if let Some(input) = edit_input_ref.cast::<HtmlInputElement>() {
                 let title = read_input_title(&input);
-
                 if is_valid_title(&title) {
                     let new_todos = update_todo_title(&todos, &id, &title);
-                    
-                    save_todos_to_storage(STORAGE_KEY, &new_todos);
-
-                    update_todos_state(&todos, new_todos);
-
+                    update_todos(&todos, new_todos, &storage_error);
                     clear_edit_state(&edit_id);
                 }
             }
         })
     };
 
-
-    // Cancel Edit
     let on_cancel = {
         let edit_id = edit_id.clone();
-        Callback::from(move |_| edit_id.set(None))
+        Callback::from(move |_| clear_edit_state(&edit_id))
     };
 
-    // Function to render a single todo item
     let render_todo = |id: String, title: String, completed: bool, is_editing: bool| {
         let id_for_toggle = id.clone();
         let id_for_edit = id.clone();
@@ -189,13 +218,13 @@ fn app() -> Html {
                     />
                     <button
                         onclick={on_update.reform(move |_| id_for_edit.clone())}
-                        class="ml-2 bg-green-500 text-white px-2 py-1 rounded hover:bg-green-600"
+                        class={format!("{} {}", BUTTON_CLASS, SAVE_BUTTON)}
                     >
                         {"Save"}
                     </button>
                     <button
                         onclick={on_cancel.clone()}
-                        class="ml-2 bg-gray-500 text-white px-2 py-1 rounded hover:bg-gray-600"
+                        class={format!("{} {}", BUTTON_CLASS, CANCEL_BUTTON)}
                     >
                         {"Cancel"}
                     </button>
@@ -211,13 +240,13 @@ fn app() -> Html {
                     </span>
                     <button
                         onclick={on_edit.reform(move |_| id_for_edit.clone())}
-                        class="ml-2 bg-yellow-500 text-white px-2 py-1 rounded hover:bg-yellow-600"
+                        class={format!("{} {}", BUTTON_CLASS, EDIT_BUTTON)}
                     >
                         {"Edit"}
                     </button>
                     <button
                         onclick={on_delete.reform(move |_| id_for_delete.clone())}
-                        class="ml-2 bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600"
+                        class={format!("{} {}", BUTTON_CLASS, DELETE_BUTTON)}
                     >
                         {"Delete"}
                     </button>
@@ -239,12 +268,18 @@ fn app() -> Html {
                     />
                     <button
                         type="submit"
-                        class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                        class={ADD_BUTTON}
                     >
                         {"Add"}
                     </button>
                 </div>
             </form>
+            {
+                (*storage_error).as_ref().map_or_else(
+                    || html! {},
+                    |error| html! { <p class="text-red-500">{ error }</p> }
+                )
+            }
             <ul class="space-y-2">
                 { for (*todos).iter().map(|todo| {
                     let is_editing = edit_id.as_ref() == Some(&todo.id);
@@ -253,10 +288,6 @@ fn app() -> Html {
             </ul>
         </div>
     }
-}
-
-fn main() {
-    yew::Renderer::<App>::new().render();
 }
 
 #[cfg(test)]
@@ -355,5 +386,8 @@ mod tests {
         assert_eq!(new_todos[1].title, "Task 2");
         assert_eq!(new_todos[1].completed, true);
     }
+}
 
+fn main() {
+    yew::Renderer::<App>::new().render();
 }
